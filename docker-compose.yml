@@ -1,0 +1,40 @@
+version: '3.8'
+
+networks:
+  red_universidad:
+
+services:
+  coordinador:
+    image: citusdata/citus:12.1
+    container_name: nodo_coordinador
+    ports:
+      - "5532:5432"
+    environment:
+      POSTGRES_USER: ezequiel
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: untdf_db
+      PGPASSWORD: admin
+    networks:
+      - red_universidad
+
+  worker_ushuaia:
+    image: citusdata/citus:12.1
+    container_name: nodo_ushuaia
+    environment:
+      POSTGRES_USER: ezequiel
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: untdf_db
+      PGPASSWORD: admin
+    networks:
+      - red_universidad
+
+  worker_riogrande:
+    image: citusdata/citus:12.1
+    container_name: nodo_riogrande
+    environment:
+      POSTGRES_USER: ezequiel
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: untdf_db
+      PGPASSWORD: admin
+    networks:
+      - red_universidad
