@@ -20,5 +20,4 @@ El proyecto está dockerizado y automatizado para que su despliegue sea transpar
 1. **Clonar el repositorio:**
    ```bash
    git clone https://github.com/rodrigueziba/bdd2026.git
-   cd TP_Final_BDD_Ibarra
    ./ejecutar_todo.sh
