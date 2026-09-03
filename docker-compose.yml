@@ -1,7 +1,23 @@
+# =========================================================
+# BASES DE DATOS DISTRIBUIDAS - UNTDF
+# Clúster Citus de 3 nodos (1 coordinador + 2 workers)
+# =========================================================
+#
+# Puertos publicados hacia la máquina anfitriona:
+#   5532 -> nodo_coordinador  (punto de acceso principal)
+#   5533 -> nodo_ushuaia      (worker sede Ushuaia)
+#   5534 -> nodo_riogrande    (worker sede Río Grande)
+#
+# Los puertos de los workers son necesarios porque la consigna
+# pide "conectarse a los workers de cada campus y realizar
+# operaciones desde cada campus sobre la base de datos".
+# =========================================================
+
 networks:
   red_universidad:
 
 services:
+
   coordinador:
     image: citusdata/citus:12.1
     container_name: nodo_coordinador
@@ -13,29 +29,48 @@ services:
       POSTGRES_DB: untdf_db
       PGPASSWORD: admin
     command: ["postgres", "-c", "wal_level=logical"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ezequiel -d untdf_db"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
     networks:
       - red_universidad
 
   worker_ushuaia:
     image: citusdata/citus:12.1
     container_name: nodo_ushuaia
+    ports:
+      - "5533:5432"
     environment:
       POSTGRES_USER: ezequiel
       POSTGRES_PASSWORD: admin
       POSTGRES_DB: untdf_db
       PGPASSWORD: admin
     command: ["postgres", "-c", "wal_level=logical"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ezequiel -d untdf_db"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
     networks:
       - red_universidad
 
   worker_riogrande:
     image: citusdata/citus:12.1
     container_name: nodo_riogrande
+    ports:
+      - "5534:5432"
     environment:
       POSTGRES_USER: ezequiel
       POSTGRES_PASSWORD: admin
       POSTGRES_DB: untdf_db
       PGPASSWORD: admin
     command: ["postgres", "-c", "wal_level=logical"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ezequiel -d untdf_db"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
     networks:
       - red_universidad

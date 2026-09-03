@@ -1,224 +1,302 @@
 -- =========================================================
--- PRUEBAS DE VALIDACIÓN
+-- BASES DE DATOS DISTRIBUIDAS - UNTDF
+-- 04 - PRUEBAS DE VALIDACIÓN (desde el COORDINADOR)
 -- =========================================================
-
-
--- =========================================================
--- PRUEBA 1
--- Transparencia de localización
--- =========================================================
-
-SELECT
-    nombre,
-    campus,
-    email
-FROM profesores
-ORDER BY campus;
-
-
--- =========================================================
--- PRUEBA 2
--- Verificar dónde están físicamente los shards
+-- Ejecutar con:
+--   docker exec -it nodo_coordinador psql -U ezequiel -d untdf_db
+-- y pegar cada prueba, o bien de corrido con:
+--   docker exec -i nodo_coordinador psql -U ezequiel -d untdf_db < 04_pruebas.sql
 --
--- Esta consulta se ejecuta en el COORDINADOR y consulta
--- directamente los metadatos de Citus.
+-- Las pruebas 8 y 9 PRODUCEN UN ERROR A PROPÓSITO. Ese error
+-- es el resultado esperado, no una falla del despliegue.
+--
+-- Las pruebas que requieren conectarse a cada worker están
+-- en el guión 05_pruebas_nodos.sh
 -- =========================================================
+
+
+\echo ''
+\echo '========================================================='
+\echo ' PRUEBA 1 - TRANSPARENCIA DE LOCALIZACIÓN'
+\echo '========================================================='
+\echo ' Objetivo: el usuario consulta una sola tabla lógica sin'
+\echo ' saber que está partida en dos servidores físicos.'
+\echo ' Esperado: 5 profesores, de ambas sedes, en un resultado'
+\echo ' único.'
+\echo ''
+
+SELECT id_profesor, nombre, campus, email
+FROM profesores
+ORDER BY campus, id_profesor;
+
+
+\echo ''
+\echo '========================================================='
+\echo ' PRUEBA 2 - METADATOS: DÓNDE DICE CITUS QUE ESTÁN'
+\echo '========================================================='
+\echo ' Objetivo: mostrar que de los 32 fragmentos de cada tabla'
+\echo ' solo 2 fueron aislados y asignados explícitamente.'
+\echo ' Esperado: fragmento de Ushuaia en nodo_ushuaia y el de'
+\echo ' Río Grande en nodo_riogrande.'
+\echo ''
 
 SELECT
-    table_name,
-    shardid,
-    shard_name,
-    nodename,
-    nodeport
-FROM citus_shards
-WHERE table_name IN (
-    'titulaciones',
-    'cursos',
-    'grupos',
-    'asignaturas',
-    'profesores',
-    'imparte',
-    'profesores_nomina'
-)
-ORDER BY
-    table_name,
-    shardid;
-
-
--- =========================================================
--- PRUEBA 3
--- Verificar específicamente el shard de Ushuaia
--- =========================================================
-
+    'Ushuaia' AS sede,
+    get_shard_id_for_distribution_column('titulaciones', 'Ushuaia') AS shardid,
+    (SELECT nodename FROM citus_shards
+      WHERE shardid = get_shard_id_for_distribution_column('titulaciones','Ushuaia')
+      LIMIT 1) AS nodo
+UNION ALL
 SELECT
-    'TITULACIONES - USHUAIA' AS prueba,
-    get_shard_id_for_distribution_column(
-        'titulaciones',
-        'Ushuaia'
-    ) AS shardid;
+    'Rio Grande',
+    get_shard_id_for_distribution_column('titulaciones', 'Rio Grande'),
+    (SELECT nodename FROM citus_shards
+      WHERE shardid = get_shard_id_for_distribution_column('titulaciones','Rio Grande')
+      LIMIT 1);
 
 
-SELECT
-    table_name,
-    shardid,
-    nodename
-FROM citus_shards
-WHERE shardid =
-    get_shard_id_for_distribution_column(
-        'titulaciones',
-        'Ushuaia'
-    );
+\echo ''
+\echo '========================================================='
+\echo ' PRUEBA 3 - UBICACIÓN FÍSICA REAL DE LAS FILAS'
+\echo '========================================================='
+\echo ' ESTA ES LA PRUEBA CENTRAL DEL TRABAJO.'
+\echo ''
+\echo ' run_command_on_placements ejecuta la consulta contra el'
+\echo ' fragmento FÍSICO (ej: profesores_102040), que es una'
+\echo ' tabla PostgreSQL común dentro de un nodo concreto. No'
+\echo ' hay ruteo distribuido posible: lo que devuelve es'
+\echo ' literalmente lo que hay en ese disco.'
+\echo ''
+\echo ' Esperado (solo fragmentos no vacíos):'
+\echo '   nodo_ushuaia   -> titulaciones 2, cursos 3, grupos 4,'
+\echo '                     asignaturas 4, profesores 3,'
+\echo '                     imparte 4, nomina 5'
+\echo '   nodo_riogrande -> titulaciones 1, cursos 1, grupos 1,'
+\echo '                     asignaturas 3, profesores 2,'
+\echo '                     imparte 2, nomina 0'
+\echo ''
+
+SELECT 'titulaciones' AS tabla, nodename AS nodo, shardid, result AS filas
+  FROM run_command_on_placements('titulaciones', $cmd$ SELECT count(*) FROM %s $cmd$)
+ WHERE result <> '0'
+UNION ALL
+SELECT 'cursos', nodename, shardid, result
+  FROM run_command_on_placements('cursos', $cmd$ SELECT count(*) FROM %s $cmd$)
+ WHERE result <> '0'
+UNION ALL
+SELECT 'grupos', nodename, shardid, result
+  FROM run_command_on_placements('grupos', $cmd$ SELECT count(*) FROM %s $cmd$)
+ WHERE result <> '0'
+UNION ALL
+SELECT 'asignaturas', nodename, shardid, result
+  FROM run_command_on_placements('asignaturas', $cmd$ SELECT count(*) FROM %s $cmd$)
+ WHERE result <> '0'
+UNION ALL
+SELECT 'profesores', nodename, shardid, result
+  FROM run_command_on_placements('profesores', $cmd$ SELECT count(*) FROM %s $cmd$)
+ WHERE result <> '0'
+UNION ALL
+SELECT 'imparte', nodename, shardid, result
+  FROM run_command_on_placements('imparte', $cmd$ SELECT count(*) FROM %s $cmd$)
+ WHERE result <> '0'
+UNION ALL
+SELECT 'profesores_nomina', nodename, shardid, result
+  FROM run_command_on_placements('profesores_nomina', $cmd$ SELECT count(*) FROM %s $cmd$)
+ WHERE result <> '0'
+ORDER BY nodo, tabla;
 
 
--- =========================================================
--- PRUEBA 4
--- Verificar específicamente el shard de Río Grande
--- =========================================================
+\echo ''
+\echo '========================================================='
+\echo ' PRUEBA 4 - CONTRAPRUEBA: POR QUÉ NO SIRVE'
+\echo '            run_command_on_workers PARA ESTO'
+\echo '========================================================='
+\echo ' Desde Citus 11 los metadatos se sincronizan en todos los'
+\echo ' nodos. Si se le envía "SELECT count(*) FROM profesores"'
+\echo ' a un worker, éste NO cuenta lo suyo: lo resuelve como'
+\echo ' consulta distribuida global y devuelve el total.'
+\echo ''
+\echo ' Esperado: AMBOS nodos responden 5 (no 3 y 2).'
+\echo ' Por eso la prueba válida es la nro 3.'
+\echo ''
 
-SELECT
-    'TITULACIONES - RIO GRANDE' AS prueba,
-    get_shard_id_for_distribution_column(
-        'titulaciones',
-        'Rio Grande'
-    ) AS shardid;
-
-
-SELECT
-    table_name,
-    shardid,
-    nodename
-FROM citus_shards
-WHERE shardid =
-    get_shard_id_for_distribution_column(
-        'titulaciones',
-        'Rio Grande'
-    );
+SELECT nodename AS nodo, result AS respuesta
+FROM run_command_on_workers('SELECT count(*) FROM profesores');
 
 
--- =========================================================
--- PRUEBA 5
--- Verificar ubicación física de PROFESORES_NOMINA
--- =========================================================
+\echo ''
+\echo '========================================================='
+\echo ' PRUEBA 5 - REPLICACIÓN TOTAL DE LOS CATÁLOGOS'
+\echo '========================================================='
+\echo ' Objetivo: verificar que PLUSES_HIJO y CLASIFICACIONES'
+\echo ' existen completas y sincronizadas en cada nodo.'
+\echo ' Esperado: cada nodo con 3 filas de cada catálogo.'
+\echo ' Ningún nodo necesita pedirle esta información al otro.'
+\echo ''
 
-SELECT
-    table_name,
-    shardid,
-    shard_name,
-    nodename,
-    nodeport
-FROM citus_shards
-WHERE table_name = 'profesores_nomina';
+SELECT 'pluses_hijo' AS tabla, nodename AS nodo, result AS filas
+  FROM run_command_on_placements('pluses_hijo', $cmd$ SELECT count(*) FROM %s $cmd$)
+UNION ALL
+SELECT 'clasificaciones', nodename, result
+  FROM run_command_on_placements('clasificaciones', $cmd$ SELECT count(*) FROM %s $cmd$)
+ORDER BY tabla, nodo;
 
-
--- =========================================================
--- PRUEBA 6
--- Verificar replicación
--- =========================================================
-
-SELECT
-    table_name,
-    citus_table_type
+SELECT table_name, citus_table_type, distribution_column, shard_count
 FROM citus_tables
-WHERE table_name IN (
-    'pluses_hijo',
-    'clasificaciones'
-);
+ORDER BY citus_table_type, table_name;
 
 
--- =========================================================
--- PRUEBA 7
--- JOIN entre fragmento de contacto y nómina
--- =========================================================
+\echo ''
+\echo '========================================================='
+\echo ' PRUEBA 6 - FRAGMENTACIÓN HÍBRIDA DE PROFESORES'
+\echo '========================================================='
+\echo ' Objetivo: los datos de CONTACTO viven en la sede del'
+\echo ' docente, pero los de NÓMINA están todos en Ushuaia.'
+\echo ' Esperado: Nadia Ramos y Marta Silva son de Río Grande'
+\echo ' y aun así su nómina figura con sede_nomina = Ushuaia.'
+\echo ''
+
+SELECT p.id_profesor,
+       p.nombre,
+       p.campus        AS sede_contacto,
+       n.sede_nomina   AS sede_nomina,
+       c.categoria,
+       c.num_horas_max
+FROM profesores p
+JOIN profesores_nomina n ON p.id_profesor = n.id_profesor
+JOIN clasificaciones  c ON n.id_clasificaciones = c.id_clasificaciones
+ORDER BY p.campus, p.id_profesor;
+
+
+\echo ''
+\echo '========================================================='
+\echo ' PRUEBA 7 - COSTO DE LA FRAGMENTACIÓN VERTICAL'
+\echo '========================================================='
+\echo ' La reunión anterior NO es co-localizada: PROFESORES se'
+\echo ' fragmenta por campus y PROFESORES_NOMINA por sede_nomina,'
+\echo ' pero el JOIN es por id_profesor, que no es clave de'
+\echo ' distribución de ninguna de las dos.'
+\echo ''
+\echo ' Citus debe REPARTICIONAR (mover datos entre nodos). La'
+\echo ' necesidad de habilitar el flag lo demuestra: sin él la'
+\echo ' consulta directamente no se puede planificar.'
+\echo ''
+\echo ' Conclusión de diseño: aislar la nómina en Ushuaia cumple'
+\echo ' el requerimiento, pero tiene como contrapartida tráfico'
+\echo ' de red en toda consulta que cruce contacto con salario.'
+\echo ''
 
 SET citus.enable_repartition_joins = on;
 
-SELECT
-    p.nombre,
-    p.campus,
-    n.sede_nomina,
-    c.categoria,
-    c.num_horas_max
+EXPLAIN (COSTS OFF)
+SELECT p.nombre, p.campus, n.sede_nomina, c.categoria
 FROM profesores p
-
-JOIN profesores_nomina n
-    ON p.id_profesor = n.id_profesor
-
-JOIN clasificaciones c
-    ON n.id_clasificaciones =
-       c.id_clasificaciones
-
+JOIN profesores_nomina n ON p.id_profesor = n.id_profesor
+JOIN clasificaciones  c ON n.id_clasificaciones = c.id_clasificaciones
 WHERE p.campus = 'Ushuaia';
 
 
--- =========================================================
--- PRUEBA 8
--- Restricción de horas máximas
--- =========================================================
---
--- Nadia tiene:
---
--- máximo = 10
--- actual = 8
---
--- Intentamos agregar 4.
---
--- Resultado esperado:
--- ERROR
--- =========================================================
+\echo ''
+\echo '========================================================='
+\echo ' PRUEBA 8 - RESTRICCIÓN DE HORAS MÁXIMAS'
+\echo '========================================================='
+\echo ' 8.a  CASO VÁLIDO'
+\echo ' Nadia Ramos (201) es Adjunto Simple: máximo 10 horas.'
+\echo ' Tiene 8 asignadas. Se le agregan 2 -> total 10.'
+\echo ' Esperado: la asignación se acepta.'
+\echo ''
 
-SELECT asignar_horas(
-    201,
-    3,
-    1,
-    2,
-    'Rio Grande',
-    4
-);
+SELECT asignar_horas(201, 7, 1, 2, 'Rio Grande', 2);
 
+SELECT id_profesor, sum(num_horas) AS horas_asignadas
+FROM imparte WHERE id_profesor = 201 GROUP BY id_profesor;
 
--- =========================================================
--- PRUEBA 9
--- UNIQUE de email
--- =========================================================
+\echo ''
+\echo ' Se revierte para dejar el estado inicial:'
+DELETE FROM imparte
+WHERE id_profesor = 201 AND id_asignatura = 7
+  AND id_curso = 1 AND id_titulacion = 2 AND campus = 'Rio Grande';
 
-INSERT INTO profesores (
-    id_profesor,
-    campus,
-    nombre,
-    direccion,
-    telefono,
-    email,
-    despacho
-)
-VALUES (
-    102,
-    'Ushuaia',
-    'Segundo Parson',
-    'Calle 1',
-    '29019999',
-    'aparson@untdf.edu.ar',
-    'DESP003'
-);
+\echo ''
+\echo ' 8.b  CASO INVÁLIDO  <<< SE ESPERA UN ERROR >>>'
+\echo ' Se intenta agregar 4 horas: 8 + 4 = 12 > 10.'
+\echo ' Esperado: ERROR con el mensaje personalizado.'
+\echo ''
+
+SELECT asignar_horas(201, 7, 1, 2, 'Rio Grande', 4);
 
 
--- =========================================================
--- PRUEBA 10
--- Entidad débil CURSOS
--- =========================================================
---
--- Debe ser posible tener:
---
--- Curso 1 / Titulación 1
--- Curso 1 / Titulación 2
---
--- porque CURSOS depende de TITULACIONES.
--- =========================================================
+\echo ''
+\echo '========================================================='
+\echo ' PRUEBA 9 - CLAVE ALTERNATIVA: EMAIL ÚNICO'
+\echo '========================================================='
+\echo ' Se intenta dar de alta un docente en Ushuaia con un'
+\echo ' correo que ya existe en esa sede.'
+\echo ' Esperado: ERROR duplicate key value violates unique'
+\echo ' constraint. El nodo de Ushuaia lo rechaza por sí mismo.'
+\echo ''
 
-SELECT
-    id_curso,
-    id_titulacion,
-    campus,
-    max_alumnos
-FROM cursos
-ORDER BY
-    id_titulacion;
+INSERT INTO profesores (id_profesor, campus, nombre, direccion, telefono, email, despacho)
+VALUES (104, 'Ushuaia', 'Andres Parson', 'Calle 1', '29019999',
+        'aparson@untdf.edu.ar', 'DESP004');
+
+
+\echo ''
+\echo '========================================================='
+\echo ' PRUEBA 10 - RESTRICCIONES DE DOMINIO  <<< ERRORES >>>'
+\echo '========================================================='
+\echo ' 10.a Teléfono con prefijo de la otra sede.'
+\echo ' Esperado: ERROR de CHECK (2964 no es válido en Ushuaia).'
+\echo ''
+
+INSERT INTO profesores (id_profesor, campus, nombre, direccion, telefono, email, despacho)
+VALUES (105, 'Ushuaia', 'Juan Perez', 'Calle 2', '29641234',
+        'jperez@untdf.edu.ar', 'DESP005');
+
+\echo ''
+\echo ' 10.b Turno fuera del dominio permitido.'
+\echo ' Esperado: ERROR de CHECK.'
+\echo ''
+
+INSERT INTO grupos (id_grupo, id_curso, id_titulacion, campus, turno)
+VALUES (9, 1, 1, 'Ushuaia', 'MADRUGADA');
+
+
+\echo ''
+\echo '========================================================='
+\echo ' PRUEBA 11 - CURSOS COMO ENTIDAD DÉBIL'
+\echo '========================================================='
+\echo ' Objetivo: demostrar que el mismo número de curso puede'
+\echo ' repetirse en titulaciones distintas.'
+\echo ' Esperado: el curso 1 aparece en las titulaciones 1, 2 y'
+\echo ' 3. Las titulaciones 1 y 3 son ambas de Ushuaia, con lo'
+\echo ' cual la unicidad no la da el campus sino id_titulacion.'
+\echo ''
+
+SELECT c.id_curso, c.id_titulacion, t.nombre AS titulacion, c.campus, c.max_alumnos
+FROM cursos c
+JOIN titulaciones t
+  ON c.id_titulacion = t.id_titulacion AND c.campus = t.campus
+ORDER BY c.id_curso, c.id_titulacion;
+
+\echo ''
+\echo ' Y el borrado en cascada desde la entidad fuerte:'
+\echo ' (solo se muestra el conteo dependiente, no se borra)'
+\echo ''
+
+SELECT t.id_titulacion, t.nombre, t.campus,
+       count(DISTINCT c.id_curso) AS cursos,
+       count(DISTINCT a.id_asignatura) AS asignaturas
+FROM titulaciones t
+LEFT JOIN cursos c
+       ON c.id_titulacion = t.id_titulacion AND c.campus = t.campus
+LEFT JOIN asignaturas a
+       ON a.id_titulacion = t.id_titulacion AND a.campus = t.campus
+GROUP BY t.id_titulacion, t.nombre, t.campus
+ORDER BY t.campus, t.id_titulacion;
+
+\echo ''
+\echo '========================================================='
+\echo ' FIN DE LAS PRUEBAS DEL COORDINADOR'
+\echo ' Continuar con:  ./05_pruebas_nodos.sh'
+\echo '========================================================='
