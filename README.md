@@ -17,7 +17,10 @@ El proyecto está dockerizado y automatizado para que su despliegue sea transpar
 * **Git Bash** (o terminal compatible con scripts `.sh`).
 
 ### Pasos para levantar el entorno
-1. **Clonar el repositorio:**
+1. **Clonar el repositorio e ingresar a la carpeta:**
    ```bash
    git clone https://github.com/rodrigueziba/bdd2026.git
+   cd bdd2026
+
+   docker compose down -v
    ./ejecutar_todo.sh

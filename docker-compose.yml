@@ -1,5 +1,3 @@
-version: '3.8'
-
 networks:
   red_universidad:
 
@@ -14,6 +12,7 @@ services:
       POSTGRES_PASSWORD: admin
       POSTGRES_DB: untdf_db
       PGPASSWORD: admin
+    command: ["postgres", "-c", "wal_level=logical"]
     networks:
       - red_universidad
 
@@ -25,6 +24,7 @@ services:
       POSTGRES_PASSWORD: admin
       POSTGRES_DB: untdf_db
       PGPASSWORD: admin
+    command: ["postgres", "-c", "wal_level=logical"]
     networks:
       - red_universidad
 
@@ -36,5 +36,6 @@ services:
       POSTGRES_PASSWORD: admin
       POSTGRES_DB: untdf_db
       PGPASSWORD: admin
+    command: ["postgres", "-c", "wal_level=logical"]
     networks:
       - red_universidad
