@@ -1,0 +1,235 @@
+
+=========================================================
+ 1. LEVANTANDO LA INFRAESTRUCTURA
+=========================================================
+
+ Network bdd_red_universidad Creating 
+ Network bdd_red_universidad Created 
+ Container nodo_ushuaia Creating 
+ Container nodo_coordinador Creating 
+ Container nodo_riogrande Creating 
+ Container nodo_coordinador Created 
+ Container nodo_ushuaia Created 
+ Container nodo_riogrande Created 
+ Container nodo_coordinador Starting 
+ Container nodo_riogrande Starting 
+ Container nodo_ushuaia Starting 
+ Container nodo_ushuaia Started 
+ Container nodo_coordinador Started 
+ Container nodo_riogrande Started 
+
+=========================================================
+ 2. ESPERANDO QUE LOS TRES MOTORES ACEPTEN CONEXIONES
+=========================================================
+
+   nodo_coordinador . listo.
+   nodo_ushuaia  listo.
+   nodo_riogrande  listo.
+
+=========================================================
+ 3. REGISTRANDO LOS NODOS EN EL CLÚSTER CITUS
+=========================================================
+
+ citus_set_coordinator_host 
+----------------------------
+ 
+(1 row)
+
+ citus_add_node 
+----------------
+              2
+(1 row)
+
+ citus_add_node 
+----------------
+              3
+(1 row)
+
+
+=========================================================
+ 4. CREANDO EL ESQUEMA LÓGICO (DDL)
+=========================================================
+
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+
+=========================================================
+ 5. APLICANDO EL DISEÑO DISTRIBUIDO Y LA ASIGNACIÓN FÍSICA
+=========================================================
+
+ create_reference_table 
+------------------------
+ 
+(1 row)
+
+ create_reference_table 
+------------------------
+ 
+(1 row)
+
+ create_distributed_table 
+--------------------------
+ 
+(1 row)
+
+ create_distributed_table 
+--------------------------
+ 
+(1 row)
+
+ create_distributed_table 
+--------------------------
+ 
+(1 row)
+
+ create_distributed_table 
+--------------------------
+ 
+(1 row)
+
+ create_distributed_table 
+--------------------------
+ 
+(1 row)
+
+ create_distributed_table 
+--------------------------
+ 
+(1 row)
+
+ create_distributed_table 
+--------------------------
+ 
+(1 row)
+
+ isolate_tenant_to_new_shard 
+-----------------------------
+                      102235
+(1 row)
+
+ isolate_tenant_to_new_shard 
+-----------------------------
+                      102256
+(1 row)
+
+NOTICE:  Moviendo fragmento 102235 de nodo_riogrande a nodo_ushuaia
+DO
+NOTICE:  El fragmento 102256 ya estaba en nodo_riogrande
+DO
+NOTICE:  === ASIGNACIÓN FÍSICA VERIFICADA: Ushuaia -> nodo_ushuaia / Río Grande -> nodo_riogrande ===
+DO
+ALTER TABLE
+ALTER TABLE
+CREATE FUNCTION
+
+=========================================================
+ 6. CARGANDO LOS DATOS INICIALES (DML)
+=========================================================
+
+INSERT 0 3
+INSERT 0 3
+INSERT 0 3
+INSERT 0 4
+INSERT 0 5
+INSERT 0 7
+INSERT 0 5
+INSERT 0 5
+ asignar_horas 
+---------------
+ 
+(1 row)
+
+ asignar_horas 
+---------------
+ 
+(1 row)
+
+ asignar_horas 
+---------------
+ 
+(1 row)
+
+ asignar_horas 
+---------------
+ 
+(1 row)
+
+ asignar_horas 
+---------------
+ 
+(1 row)
+
+ asignar_horas 
+---------------
+ 
+(1 row)
+
+
+=========================================================
+ 7. WORKERS ACTIVOS
+=========================================================
+
+   node_name    | node_port 
+----------------+-----------
+ nodo_ushuaia   |      5432
+ nodo_riogrande |      5432
+(2 rows)
+
+
+=========================================================
+ 8. TIPO DE DISTRIBUCIÓN DE CADA TABLA
+=========================================================
+
+    table_name     | citus_table_type | distribution_column | shard_count 
+-------------------+------------------+---------------------+-------------
+ titulaciones      | distributed      | campus              |          36
+ cursos            | distributed      | campus              |          36
+ grupos            | distributed      | campus              |          36
+ asignaturas       | distributed      | campus              |          36
+ profesores        | distributed      | campus              |          36
+ profesores_nomina | distributed      | sede_nomina         |          36
+ imparte           | distributed      | campus              |          36
+ pluses_hijo       | reference        | <none>              |           1
+ clasificaciones   | reference        | <none>              |           1
+(9 rows)
+
+
+=========================================================
+ 9. UBICACIÓN FÍSICA DE LOS FRAGMENTOS CON DATOS
+=========================================================
+
+       tabla       |      nodo      | filas 
+-------------------+----------------+-------
+ profesores        | nodo_riogrande | 2
+ titulaciones      | nodo_riogrande | 1
+ profesores        | nodo_ushuaia   | 3
+ profesores_nomina | nodo_ushuaia   | 5
+ titulaciones      | nodo_ushuaia   | 2
+(5 rows)
+
+
+=========================================================
+ DESPLIEGUE FINALIZADO CORRECTAMENTE
+=========================================================
+
+ Conexión al coordinador:
+   docker exec -it nodo_coordinador psql -U ezequiel -d untdf_db
+
+ Pruebas:
+   docker exec -i nodo_coordinador psql -U ezequiel -d untdf_db < 04_pruebas.sql
+   ./05_pruebas_nodos.sh
+
