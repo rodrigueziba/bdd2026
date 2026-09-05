@@ -34,8 +34,9 @@ ORDER BY campus, id_profesor;
 \echo '========================================================='
 \echo ' PRUEBA 2 - METADATOS: DÓNDE DICE CITUS QUE ESTÁN'
 \echo '========================================================='
-\echo ' Objetivo: mostrar que de los 32 fragmentos de cada tabla'
+\echo ' Objetivo: mostrar que de los 36 fragmentos de cada tabla'
 \echo ' solo 2 fueron aislados y asignados explícitamente.'
+\echo ' (32 por defecto, mas dos que agrega cada aislamiento)'
 \echo ' Esperado: fragmento de Ushuaia en nodo_ushuaia y el de'
 \echo ' Río Grande en nodo_riogrande.'
 \echo ''
@@ -62,8 +63,8 @@ SELECT
 \echo ' ESTA ES LA PRUEBA CENTRAL DEL TRABAJO.'
 \echo ''
 \echo ' run_command_on_placements ejecuta la consulta contra el'
-\echo ' fragmento FÍSICO (ej: profesores_102040), que es una'
-\echo ' tabla PostgreSQL común dentro de un nodo concreto. No'
+\echo ' fragmento FÍSICO (por ejemplo profesores_102247), que es'
+\echo ' una tabla PostgreSQL común dentro de un nodo concreto. No'
 \echo ' hay ruteo distribuido posible: lo que devuelve es'
 \echo ' literalmente lo que hay en ese disco.'
 \echo ''
@@ -130,7 +131,10 @@ FROM run_command_on_workers('SELECT count(*) FROM profesores');
 \echo '========================================================='
 \echo ' Objetivo: verificar que PLUSES_HIJO y CLASIFICACIONES'
 \echo ' existen completas y sincronizadas en cada nodo.'
-\echo ' Esperado: cada nodo con 3 filas de cada catálogo.'
+\echo ' Esperado: 3 filas de cada catálogo en cada ubicación.'
+\echo ' Aparecen tres nodos y no dos: el coordinador también'
+\echo ' mantiene una copia de las tablas de referencia, porque'
+\echo ' fue registrado en los metadatos del clúster.'
 \echo ' Ningún nodo necesita pedirle esta información al otro.'
 \echo ''
 
@@ -150,11 +154,56 @@ ORDER BY citus_table_type, table_name;
 \echo '========================================================='
 \echo ' PRUEBA 6 - FRAGMENTACIÓN HÍBRIDA DE PROFESORES'
 \echo '========================================================='
+\echo ' 6.a  LA REUNIÓN NO ES CO-LOCALIZADA  <<< SE ESPERA UN ERROR >>>'
+\echo ''
+\echo ' Se intenta cruzar los datos de contacto con los de'
+\echo ' nómina. PROFESORES se fragmenta por campus y'
+\echo ' PROFESORES_NOMINA por sede_nomina, pero el JOIN es por'
+\echo ' id_profesor, que no es clave de distribución de ninguna'
+\echo ' de las dos. Citus no puede resolverlo localmente.'
+\echo ''
+\echo ' Esperado: ERROR "the query contains a join that requires'
+\echo ' repartitioning". Ese error ES la demostración de que la'
+\echo ' fragmentación vertical separó los datos en dos grupos'
+\echo ' que no se pueden reunir sin mover tuplas entre nodos.'
+\echo ''
+
+SELECT p.id_profesor, p.nombre, p.campus, n.sede_nomina, c.categoria
+FROM profesores p
+JOIN profesores_nomina n ON p.id_profesor = n.id_profesor
+JOIN clasificaciones  c ON n.id_clasificaciones = c.id_clasificaciones
+ORDER BY p.campus, p.id_profesor;
+
+\echo ''
+\echo ' 6.b  LA MISMA CONSULTA, AUTORIZANDO EL REPARTICIONAMIENTO'
+\echo ''
 \echo ' Objetivo: los datos de CONTACTO viven en la sede del'
 \echo ' docente, pero los de NÓMINA están todos en Ushuaia.'
 \echo ' Esperado: Nadia Ramos y Marta Silva son de Río Grande'
 \echo ' y aun así su nómina figura con sede_nomina = Ushuaia.'
 \echo ''
+\echo ' Se requieren DOS autorizaciones, no una:'
+\echo ''
+\echo '  - enable_repartition_joins habilita el movimiento de'
+\echo '    tuplas entre nodos que exige la reunión.'
+\echo ''
+\echo '  - multi_shard_modify_mode = sequential es necesario'
+\echo '    porque PROFESORES_NOMINA tiene una clave foránea'
+\echo '    hacia la tabla de referencia CLASIFICACIONES. El'
+\echo '    reparticionamiento crea resultados intermedios en'
+\echo '    cada nodo, y Citus exige resolverlos con una única'
+\echo '    conexión por nodo para no romper la integridad'
+\echo '    referencial contra una tabla replicada.'
+\echo ''
+\echo ' Es otra manifestación del mismo costo: la reunión entre'
+\echo ' fragmentos verticales no solo mueve datos por la red,'
+\echo ' además pierde el paralelismo entre fragmentos.'
+\echo ''
+
+SET citus.enable_repartition_joins = on;
+
+BEGIN;
+SET LOCAL citus.multi_shard_modify_mode TO 'sequential';
 
 SELECT p.id_profesor,
        p.nombre,
@@ -167,26 +216,27 @@ JOIN profesores_nomina n ON p.id_profesor = n.id_profesor
 JOIN clasificaciones  c ON n.id_clasificaciones = c.id_clasificaciones
 ORDER BY p.campus, p.id_profesor;
 
+COMMIT;
+
 
 \echo ''
 \echo '========================================================='
 \echo ' PRUEBA 7 - COSTO DE LA FRAGMENTACIÓN VERTICAL'
 \echo '========================================================='
-\echo ' La reunión anterior NO es co-localizada: PROFESORES se'
-\echo ' fragmenta por campus y PROFESORES_NOMINA por sede_nomina,'
-\echo ' pero el JOIN es por id_profesor, que no es clave de'
-\echo ' distribución de ninguna de las dos.'
+\echo ' Se examina el plan de ejecución de la consulta anterior.'
 \echo ''
-\echo ' Citus debe REPARTICIONAR (mover datos entre nodos). La'
-\echo ' necesidad de habilitar el flag lo demuestra: sin él la'
-\echo ' consulta directamente no se puede planificar.'
+\echo ' Esperado: un árbol con nodos MapMergeJob, que es la'
+\echo ' forma en que Citus expresa una reunión con'
+\echo ' reparticionamiento: primero redistribuye las tuplas'
+\echo ' entre los nodos (Map) y después las combina (Merge).'
+\echo ''
+\echo ' Obsérvese que Map Task Count coincide con el número de'
+\echo ' fragmentos de la relación distribuida.'
 \echo ''
 \echo ' Conclusión de diseño: aislar la nómina en Ushuaia cumple'
 \echo ' el requerimiento, pero tiene como contrapartida tráfico'
 \echo ' de red en toda consulta que cruce contacto con salario.'
 \echo ''
-
-SET citus.enable_repartition_joins = on;
 
 EXPLAIN (COSTS OFF)
 SELECT p.nombre, p.campus, n.sede_nomina, c.categoria
