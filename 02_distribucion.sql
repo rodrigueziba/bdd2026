@@ -22,8 +22,6 @@ SELECT create_reference_table('clasificaciones');
 -- =========================================================
 -- 2. FRAGMENTACIÓN HORIZONTAL POR CAMPUS
 -- =========================================================
-
---
 -- create_distributed_table(tabla, 'campus') NO coloca los
 -- datos de Ushuaia en nodo_ushuaia. Lo que hace es:
 --   a) partir la tabla en 32 fragmentos (shard_count por
@@ -32,7 +30,7 @@ SELECT create_reference_table('clasificaciones');
 --   c) repartir esos 32 fragmentos entre los workers sin
 --      mirar el VALOR de la clave.
 --
--- la ubicación física es arbitraria. Para cumplir
+-- Es decir: la ubicación física es arbitraria. Para cumplir
 -- el requerimiento de que cada sede aloje sus propios datos
 -- hace falta la asignación explícita de los pasos 3 y 4.
 --
@@ -76,8 +74,13 @@ SELECT create_distributed_table('profesores_nomina', 'sede_nomina', colocate_wit
 -- Con 'CASCADE' la operación se aplica a todas las tablas
 -- co-localizadas, no solo a titulaciones.
 --
--- Resultado: de los 32 fragmentos, 2 concentran el 100% de
--- los datos (uno por sede) y los 30 restantes quedan vacíos.
+-- Cada aislamiento parte un fragmento en hasta TRES: el
+-- rango anterior al valor aislado, el fragmento del valor
+-- aislado y el rango posterior. El total pasa entonces de
+-- 32 a 34 con la primera llamada y a 36 con la segunda.
+--
+-- Resultado: de los 36 fragmentos, 2 concentran el 100% de
+-- los datos (uno por sede) y los 34 restantes quedan vacíos.
 -- =========================================================
 
 SELECT isolate_tenant_to_new_shard('titulaciones', 'Ushuaia',    'CASCADE');
@@ -211,6 +214,10 @@ ALTER TABLE profesores_nomina
 -- Supuesto semántico: N_HORAS_MAX de CLASIFICACIONES debe
 -- ser mayor o igual que la suma de NUM_HORAS de IMPARTE de
 -- todos los registros del profesor.
+--
+-- No puede expresarse con un CHECK: un CHECK solo ve la fila
+-- que se está insertando y esta regla necesita consultar
+-- otras dos tablas (IMPARTE agregada y CLASIFICACIONES).
 --
 -- Se implementa como procedimiento almacenado, que actúa
 -- como única vía de alta autorizada sobre IMPARTE.
